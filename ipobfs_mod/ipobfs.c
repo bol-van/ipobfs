@@ -71,9 +71,9 @@ MODULE_PARM_DESC(data_xor, "uint32 data xor : 0xDEADBEAF,0x01020304,0");
 MODULE_PARM_DESC(data_xor_offset, "start xoring from position : 4,4,8");
 MODULE_PARM_DESC(data_xor_len, "xor no more than : 0,0,16");
 MODULE_PARM_DESC(ipp_xor, "xor ip protocol with : 0,0x80,42");
-MODULE_PARM_DESC(prehook, "input hook : prerouting (default), input, forward");
+MODULE_PARM_DESC(prehook, "input hook : none, prerouting (default), input, forward");
 MODULE_PARM_DESC(pre, "input hook priority : mangle (default), raw, filter or <integer>");
-MODULE_PARM_DESC(posthook, "output hook : postrouting (default), output, forward");
+MODULE_PARM_DESC(posthook, "output hook : none, postrouting (default), output, forward");
 MODULE_PARM_DESC(post, "output hook priority : mangle (default), raw, filter or <integer>");
 MODULE_PARM_DESC(csum, "csum mode : none = invalid csums are ok, fix = valid csums on original outgoing packets, valid = valid csums on obfuscated packets");
 
@@ -85,6 +85,103 @@ typedef struct {
 	int priority;
 	bool bOutgoing;
 } t_hook_id;
+
+
+
+static int nf_priority_from_string(const char *s)
+{
+	int r,n = NF_IP_PRI_MANGLE+1;
+	if (s)
+	{
+		if (!strcmp(s,"mangle"))
+			n = NF_IP_PRI_MANGLE+1;
+		else if (!strcmp(s,"raw"))
+			n = NF_IP_PRI_RAW+1;
+		else if (!strcmp(s,"filter"))
+			n = NF_IP_PRI_FILTER+1;
+		else
+			r = kstrtoint(s, 0, &n);
+	}
+	return n;
+}
+static const char *nf_string_from_priority(int pri)
+{
+	switch(pri)
+	{
+		case NF_IP_PRI_RAW+1: return "raw";
+		case NF_IP_PRI_MANGLE+1: return "mangle";
+		case NF_IP_PRI_FILTER+1: return "filter";
+		default: return "custom";
+	}
+}
+static unsigned int nf_hooknum_from_string(const char *s, int def_num)
+{
+	int r,n = def_num;
+	if (s)
+	{
+		if (!strcmp(s,"input"))
+			n = NF_INET_LOCAL_IN;
+		else if (!strcmp(s,"forward"))
+			n = NF_INET_FORWARD;
+		else if (!strcmp(s,"output"))
+			n = NF_INET_LOCAL_OUT;
+		else if (!strcmp(s,"postrouting"))
+			n = NF_INET_POST_ROUTING;
+		else if (!strcmp(s,"prerouting"))
+			n = NF_INET_PRE_ROUTING;
+		else if (!strcmp(s,"none"))
+			n = -1;
+		else
+			r = kstrtoint(s, 0, &n);
+	}
+	return n;
+}
+static const char *nf_string_from_hooknum(int hooknum)
+{
+	switch(hooknum)
+	{
+		case NF_INET_PRE_ROUTING: return "prerouting";
+		case NF_INET_POST_ROUTING: return "postrouting";
+		case NF_INET_LOCAL_IN: return "input";
+		case NF_INET_LOCAL_OUT: return "output";
+		case NF_INET_FORWARD: return "forward";
+		case -1: return "none";
+		default: return "custom";
+	}
+}
+static t_csum csum_from_string(char *s)
+{
+	t_csum m;
+	if (!s) m=none;
+	else if (!strcmp(s,"fix")) m=fix;
+	else if (!strcmp(s,"valid")) m=valid;
+	else m=none;
+	return m;
+}
+static const char *string_from_csum(t_csum csum)
+{
+	switch(csum)
+	{
+		case fix: return "fix";
+		case valid: return "valid";
+		default: return "none";
+	}
+}
+static void translate_csum_s(void)
+{
+	int i;
+	for(i=0;i<ct_csum;i++) csum[i]=csum_from_string(csum_s[i]);
+}
+static void translate_hooknum(char **hooknum_s, int ct, unsigned int *hooknum, int def_hooknum)
+{
+	int i;
+	for(i=0;i<ct_mark;i++) hooknum[i] = nf_hooknum_from_string(i<ct ? hooknum_s[i] : NULL, def_hooknum);
+}
+static void translate_priority(char **pri_s, int ct, int *pri)
+{
+	int i;
+	for(i=0;i<ct_mark;i++) pri[i] = nf_priority_from_string(i<ct ? pri_s[i] : NULL);
+}
 
 
 static int find_mark(uint fwmark)
@@ -191,7 +288,7 @@ static void fix_transport_checksum(struct sk_buff *skb)
 			((struct udphdr*)pt)->check = check;
 			break;
 	}
-	if (debug) printk(KERN_DEBUG "ipobfs: fix_transport_checksum pver=%u proto=%u %04X => %04X\n",pver,proto,check_old,check);
+	if (debug) printk(KERN_DEBUG "ipobfs: fix_transport_checksum pver=%u proto=%u tlen=%u %04X => %04X\n",pver,proto,tlen,check_old,check);
 }
 
 
@@ -243,20 +340,22 @@ static void modify_skb_payload(struct sk_buff *skb,int idx,bool bOutgoing)
 {
 	uint len;
 	u8 *p,*pn,pver;
+	t_csum csum_mode;
 
 	if (!skb_transport_header_was_set(skb)) return;
 
 	len = skb_headlen(skb);
 	p = skb_transport_header(skb);
 	len -= skb->transport_header - skb->network_header;
+	csum_mode=GET_PARAM(csum,idx);
 
 	// dont linearize if possible
 	if (skb_is_nonlinear(skb))
 	{
 		uint last_mod_offset=GET_PARAM(data_xor_offset,idx)+GET_DATA_XOR_LEN(idx);
-		if(last_mod_offset>len)
+		if(csum_mode==fix || csum_mode==valid || last_mod_offset>len)
 		{
-			if (debug) printk(KERN_DEBUG "ipobfs: nonlinear skb. skb_headlen=%u skb_data_len=%u skb_len_transport=%u last_mod_offset=%u. linearize skb",skb_headlen(skb),skb->data_len,len,last_mod_offset);
+			if (debug) printk(KERN_DEBUG "ipobfs: nonlinear skb. skb_headlen=%u skb_data_len=%u skb_len_transport=%u last_mod_offset=%u csum_mode=%s. linearize skb",skb_headlen(skb),skb->data_len,len,last_mod_offset,string_from_csum(csum_mode));
 			if (skb_linearize(skb)) 
 			{
 				if (debug) printk(KERN_DEBUG "ipobfs: failed to linearize skb");
@@ -267,17 +366,17 @@ static void modify_skb_payload(struct sk_buff *skb,int idx,bool bOutgoing)
 			len -= skb->transport_header - skb->network_header;
 		}
 		else
-			if (debug) printk(KERN_DEBUG "ipobfs: nonlinear skb. skb_headlen=%u skb_data_len=%u skb_len_transport=%u last_mod_offset=%u. dont linearize skb",skb_headlen(skb),skb->data_len,len,last_mod_offset);
+			if (debug) printk(KERN_DEBUG "ipobfs: nonlinear skb. skb_headlen=%u skb_data_len=%u skb_len_transport=%u last_mod_offset=%u csum_mode=%s. dont linearize skb",skb_headlen(skb),skb->data_len,len,last_mod_offset,string_from_csum(csum_mode));
 	}
 
-	if (bOutgoing && GET_PARAM(csum,idx)==fix) fix_transport_checksum(skb);
+	if (bOutgoing && csum_mode==fix) fix_transport_checksum(skb);
 
 	pn = skb_network_header(skb);
 	pver = ip_proto_ver(pn);
 	modify_packet_payload(p,len,pver==4 ? ip4_frag_offset((struct iphdr*)pn) : 0, GET_PARAM(data_xor,idx), GET_PARAM(data_xor_offset,idx), GET_DATA_XOR_LEN(idx));
 
 	if (debug) printk(KERN_DEBUG "ipobfs: modify_skb_payload ipv%u proto=%u len=%u data_xor=%08X data_xor_offset=%u data_xor_len=%u\n",pver,transport_proto(pn),len,GET_PARAM(data_xor,idx), GET_PARAM(data_xor_offset,idx), GET_DATA_XOR_LEN(idx));
-	if (GET_PARAM(csum,idx)==valid) fix_transport_checksum(skb);
+	if (csum_mode==valid) fix_transport_checksum(skb);
 }
 
 static void modify_skb_ipp(struct sk_buff *skb,int idx)
@@ -310,6 +409,13 @@ static uint hook_ip(void *priv, struct sk_buff *skb, const struct nf_hook_state 
 	if (idx!=-1)
 	{
 		bool bOutgoing = ((t_hook_id*)priv)->bOutgoing;
+		if (debug)
+			printk(KERN_DEBUG "ipobfs: hook_ip %s mark_idx=%d hook=%s pri=%s in=%s out=%s\n",
+				bOutgoing ? "out" : "in",
+				idx,
+				nf_string_from_hooknum(state->hook),
+				nf_string_from_priority(((t_hook_id*)priv)->priority),
+				state->in ? state->in->name : "null", state->out ? state->out->name : "null");
 		if ((!bOutgoing && ((t_hook_id*)priv)->priority==pre[idx] && state->hook==prehook[idx]) ||
 			(bOutgoing && ((t_hook_id*)priv)->priority==post[idx] && state->hook==posthook[idx]))
 		{
@@ -325,6 +431,8 @@ static uint hook_ip(void *priv, struct sk_buff *skb, const struct nf_hook_state 
 				if (GET_PARAM(ipp_xor,idx)) modify_skb_ipp(skb,idx);
 				if (GET_PARAM(data_xor,idx)) modify_skb_payload(skb,idx,bOutgoing);
 			}
+			// clear mask bits to avoid processing in post hook
+			skb->mark &= ~markmask;
 		}
 	}
 	return NF_ACCEPT;
@@ -333,95 +441,6 @@ static uint hook_ip(void *priv, struct sk_buff *skb, const struct nf_hook_state 
 
 
 
-static int nf_priority_from_string(const char *s)
-{
-	int r,n = NF_IP_PRI_MANGLE+1;
-	if (s)
-	{
-		if (!strcmp(s,"raw"))
-			n = NF_IP_PRI_RAW+1;
-		if (!strcmp(s,"filter"))
-			n = NF_IP_PRI_FILTER+1;
-		else
-			r = kstrtoint(s, 0, &n);
-	}
-	return n;
-}
-static const char *nf_string_from_priority(int pri)
-{
-	switch(pri)
-	{
-		case NF_IP_PRI_RAW+1: return "raw";
-		case NF_IP_PRI_MANGLE+1: return "mangle";
-		case NF_IP_PRI_FILTER+1: return "filter";
-		default: return "custom";
-	}
-}
-static unsigned int nf_hooknum_from_string(const char *s, int def_num)
-{
-	int r,n = def_num;
-	if (s)
-	{
-		if (!strcmp(s,"input"))
-			n = NF_INET_LOCAL_IN;
-		else if (!strcmp(s,"forward"))
-			n = NF_INET_FORWARD;
-		else if (!strcmp(s,"output"))
-			n = NF_INET_LOCAL_OUT;
-		else if (!strcmp(s,"postrouting"))
-			n = NF_INET_POST_ROUTING;
-		else if (!strcmp(s,"prerouting"))
-			n = NF_INET_PRE_ROUTING;
-		else
-			r = kstrtoint(s, 0, &n);
-	}
-	return n;
-}
-static const char *nf_string_from_hooknum(int hooknum)
-{
-	switch(hooknum)
-	{
-		case NF_INET_PRE_ROUTING: return "prerouting";
-		case NF_INET_POST_ROUTING: return "postrouting";
-		case NF_INET_LOCAL_IN: return "input";
-		case NF_INET_LOCAL_OUT: return "output";
-		case NF_INET_FORWARD: return "forward";
-		default: return "custom";
-	}
-}
-static t_csum csum_from_string(char *s)
-{
-	t_csum m;
-	if (!s) m=none;
-	else if (!strcmp(s,"fix")) m=fix;
-	else if (!strcmp(s,"valid")) m=valid;
-	else m=none;
-	return m;
-}
-static const char *string_from_csum(t_csum csum)
-{
-	switch(csum)
-	{
-		case fix: return "fix";
-		case valid: return "valid";
-		default: return "none";
-	}
-}
-static void translate_csum_s(void)
-{
-	int i;
-	for(i=0;i<ct_csum;i++) csum[i]=csum_from_string(csum_s[i]);
-}
-static void translate_hooknum(char **hooknum_s, int ct, unsigned int *hooknum, int def_hooknum)
-{
-	int i;
-	for(i=0;i<ct_mark;i++) hooknum[i] = nf_hooknum_from_string(i<ct ? hooknum_s[i] : NULL, def_hooknum);
-}
-static void translate_priority(char **pri_s, int ct, int *pri)
-{
-	int i;
-	for(i=0;i<ct_mark;i++) pri[i] = nf_priority_from_string(i<ct ? pri_s[i] : NULL);
-}
 
 static struct nf_hook_ops nfhk_pre[MAX_MARK*2], nfhk_post[MAX_MARK*2];
 static int ct_nfhk_pre,ct_nfhk_post;
@@ -442,7 +461,7 @@ static void fill_hook_table(struct nf_hook_ops *nfhk, int *ct, t_hook_id *hookid
 	*ct = 0;
 	for(i=n=0;i<ct_mark;i++)
 	{
-		if (-1 == find_hook(nfhk,*ct,hooknums[i],pris[i],PF_INET))
+		if (hooknums[i]!=-1 && find_hook(nfhk,*ct,hooknums[i],pris[i],PF_INET)==-1)
 		{
 			hookid[n].priority = pris[i];
 			hookid[n].bOutgoing = bOutgoing;
