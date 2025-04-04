@@ -1,0 +1,47 @@
+server ipv4 udp:16 :
+iptables -t mangle -I PREROUTING -i eth0 -p 145 -m u32 --u32 "0>>22&0x3C@0&0xFFFF=16" -j NFQUEUE --queue-num 300 --queue-bypass
+iptables -t mangle -I POSTROUTING -o eth0 -p udp --sport 16  -j NFQUEUE --queue-num 300 --queue-bypass
+
+client ipv4 udp:16 :
+iptables -t mangle -I PREROUTING -i eth0 -p 145 -m u32 --u32 "0>>22&0x3C@0>>16&0xFFFF=16" -j NFQUEUE --queue-num 300 --queue-bypass
+iptables -t mangle -I POSTROUTING -o eth0 -p udp --dport 16  -j NFQUEUE --queue-num 300 --queue-bypass
+
+./ipobfs --qnum=300 --ipproto-xor=128 --data-xor=0x458A2ECD --data-xor-offset=4 --data-xor-len=44
+
+
+server ipv6 tcp:12345 :
+ip6tables -t mangle -I PREROUTING -i eth0 -p 59 -m u32 --u32 "40&0xFFFF=12345" -j NFQUEUE --queue-num 300 --queue-bypass
+ip6tables -t mangle -I POSTROUTING -o eth0 -p tcp --sport 12345 -j NFQUEUE --queue-num 300 --queue-bypass
+
+client ipv6 tcp:12345 :
+ip6tables -t mangle -I PREROUTING -i eth0 -p 59 -m u32 --u32 "38&0xFFFF=12345" -j NFQUEUE --queue-num 300 --queue-bypass
+ip6tables -t mangle -I POSTROUTING -o eth0 -p tcp --dport 12345 -j NFQUEUE --queue-num 300 --queue-bypass
+
+./ipobfs --qnum=300 --ipproto-xor=61 --data-xor=0x458A2ECD --data-xor-offset=4
+
+
+------------------------------------------------------------------------------------------------------------------------------------
+
+
+server ipv4 udp:16 :
+iptables -t mangle -I PREROUTING -i eth0 -p 145 -m u32 --u32 "0>>22&0x3C@0&0xFFFF=16" -j MARK --set-xmark 0x100/0x100
+iptables -t mangle -I POSTROUTING -o eth0 -p udp --sport 16 -j MARK --set-xmark 0x100/0x100
+
+client ipv4 udp:16 :
+iptables -t mangle -I PREROUTING -i eth0 -p 145 -m u32 --u32 "0>>22&0x3C@0>>16&0xFFFF=16" -j MARK --set-xmark 0x100/0x100
+iptables -t mangle -I POSTROUTING -o eth0 -p udp --dport 16 -j MARK --set-xmark 0x100/0x100
+
+rmmod ipobfs
+insmod /lib/modules/`uname -r`/extra/ipobfs.ko  mark=0x100 ipp_xor=128 data_xor=0x458A2ECD data_xor_offset=4 data_xor_len=44
+
+
+server ipv6 tcp:12345 :
+ip6tables -t mangle -I PREROUTING -i eth0 -p 59 -m u32 --u32 "40&0xFFFF=12345" -j MARK --set-xmark 0x200/0x200
+ip6tables -t mangle -I POSTROUTING -o eth0 -p tcp --sport 12345 -j MARK --set-xmark 0x200/0x200
+
+client ipv6 tcp:12345 :
+ip6tables -t mangle -I PREROUTING -i eth0 -p 59 -m u32 --u32 "38&0xFFFF=12345" -j MARK --set-xmark 0x200/0x200
+ip6tables -t mangle -I POSTROUTING -o eth0 -p tcp --dport 12345 -j MARK --set-xmark 0x200/0x200
+
+rmmod ipobfs
+insmod /lib/modules/`uname -r`/extra/ipobfs.ko  mark=0x200 ipp_xor=61 data_xor=0x458A2ECD data_xor_offset=4

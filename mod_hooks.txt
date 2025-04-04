@@ -1,0 +1,50 @@
+ipobfs_mod sets up 2 hooks : one for inbound, one for outbound
+
+module takes parameters
+ pre=<priority>		(default : mangle)
+ prehook=<hooknum>	(default : prerouting)
+ post=<priority>	(default : mangle)
+ posthook=<hooknum>	(default : postrouting)
+
+priority : mangle (default), raw, filter or <integer> 
+ raw = NF_IP_PRI_RAW+1
+ mangle = NF_IP_PRI_MANGLE+1
+ filter = NF_IP_PRI_FILTER+1
+ <integer> = positive or negative decimal or hex value. hex start with 0x prefix
+
+hooknum : prerouting (inbound default), input, output, forward, postrouting (outbound default) or <integer>
+ prerouting = NF_INET_PRE_ROUTING
+ input = NF_INET_LOCAL_IN
+ forward = NF_INET_FORWARD
+ output = NF_INET_LOCAL_OUT
+ postrouting = NF_INET_POST_ROUTING
+ <integer> = decimal or hex value. hex start with 0x prefix
+
+valid hooknum numbers :
+
+enum nf_inet_hooks {
+	NF_INET_PRE_ROUTING = 0,
+	NF_INET_LOCAL_IN = 1,
+	NF_INET_FORWARD = 2,
+	NF_INET_LOCAL_OUT = 3,
+	NF_INET_POST_ROUTING = 4
+};
+
+priorities :
+
+enum nf_ip_hook_priorities {
+	NF_IP_PRI_FIRST = INT_MIN,
+	NF_IP_PRI_CONNTRACK_DEFRAG = -400,
+	NF_IP_PRI_RAW = -300,
+	NF_IP_PRI_SELINUX_FIRST = -225,
+	NF_IP_PRI_CONNTRACK = -200,
+	NF_IP_PRI_MANGLE = -150,
+	NF_IP_PRI_NAT_DST = -100,
+	NF_IP_PRI_FILTER = 0,
+	NF_IP_PRI_SECURITY = 50,
+	NF_IP_PRI_NAT_SRC = 100,
+	NF_IP_PRI_SELINUX_LAST = 225,
+	NF_IP_PRI_CONNTRACK_HELPER = 300,
+	NF_IP_PRI_CONNTRACK_CONFIRM = INT_MAX,
+	NF_IP_PRI_LAST = INT_MAX,
+};
