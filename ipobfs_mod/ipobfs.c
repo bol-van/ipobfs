@@ -432,7 +432,7 @@ static uint hook_ip(void *priv, struct sk_buff *skb, const struct nf_hook_state 
 				if (GET_PARAM(data_xor,idx)) modify_skb_payload(skb,idx,bOutgoing);
 			}
 			// clear mask bits to avoid processing in post hook
-			skb->mark &= ~markmask;
+			skb->mark &= ~(markmask ? markmask : GET_PARAM(mark,idx));
 		}
 	}
 	return NF_ACCEPT;
