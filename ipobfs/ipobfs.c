@@ -583,6 +583,13 @@ int main(int argc, char **argv)
 		goto exiterr;
 	}
 
+#if defined SOL_NETLINK && defined NETLINK_NO_ENOBUFS
+	int yes=1;
+	if (setsockopt(fd, SOL_NETLINK, NETLINK_NO_ENOBUFS, &yes, sizeof(yes)) == -1)
+		fprintf(stderr, "setsockopt(NETLINK_NO_ENOBUFS)");
+#endif
+
+
 	if (!droproot(uid, gid)) goto exiterr;
 	fprintf(stderr, "Running as UID=%u GID=%u\n", getuid(), getgid());
 
