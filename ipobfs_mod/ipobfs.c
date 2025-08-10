@@ -379,6 +379,13 @@ static void modify_skb_payload(struct sk_buff *skb,int idx,bool bOutgoing)
 	if (csum_mode==valid) fix_transport_checksum(skb);
 }
 
+static void fix_skb_csum(struct sk_buff *skb,int idx,bool bOutgoing)
+{
+	t_csum csum_mode=GET_PARAM(csum,idx);
+	if (csum_mode==valid || (bOutgoing && csum_mode==fix)) fix_transport_checksum(skb);
+}
+
+
 static void modify_skb_ipp(struct sk_buff *skb,int idx)
 {
 	uint8_t pver,proto_old=0,proto_new=0;
@@ -423,8 +430,15 @@ static uint hook_ip(void *priv, struct sk_buff *skb, const struct nf_hook_state 
 			// do data modification with original ip protocol. necessary for checksums
 			if (bOutgoing)
 			{
-				if (GET_PARAM(data_xor,idx)) modify_skb_payload(skb,idx,bOutgoing);
-				if (GET_PARAM(ipp_xor,idx)) modify_skb_ipp(skb,idx);
+				if (GET_PARAM(data_xor,idx))
+					modify_skb_payload(skb,idx,bOutgoing);
+				if (GET_PARAM(ipp_xor,idx))
+				{
+					if (!GET_PARAM(data_xor,idx))
+						// if we make it not tcp/udp, offload will not calc csum. must take care of this.
+						fix_skb_csum(skb,idx,bOutgoing);
+					modify_skb_ipp(skb,idx);
+				}
 			}
 			else
 			{
