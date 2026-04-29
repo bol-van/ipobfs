@@ -507,7 +507,7 @@ static void printk_hook_table(const char *prefix, const struct nf_hook_ops *nfhk
 	}
 }
  
-int init_module(void)
+static int __init ipobfs_init(void)
 {
 	int i;
 
@@ -555,9 +555,12 @@ int init_module(void)
 	return 0;
 }
 
-void cleanup_module(void)
+static void __exit ipobfs_cleanup(void)
 {
 	nf_unregister_net_hooks(&init_net,nfhk_pre,ct_nfhk_pre);
 	nf_unregister_net_hooks(&init_net,nfhk_post,ct_nfhk_post);
 	printk(KERN_INFO "ipobfs: module unloaded\n");
 }
+
+module_init(ipobfs_init);
+module_exit(ipobfs_cleanup);
